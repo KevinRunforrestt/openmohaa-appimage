@@ -119,20 +119,32 @@ mkdir -p "$BUILDDIR" "$ROOTFS" "$DISTDIR"
 # Determine which version to download
 if [ -n "${OPENMOHAA_REF:-}" ]; then
     # User specified a ref (tag/branch/commit)
+    OPENMOHAA_TAG="$OPENMOHAA_REF"
     OPENMOHAA_VERSION="$OPENMOHAA_REF"
     log "Using user-specified ref: $OPENMOHAA_VERSION"
 else
-    # Get latest release tag
-    OPENMOHAA_VERSION=$(curl -fsSL \
+    # Get latest release - use "name" field (e.g. "v0.82.1-beta") not "tag_name" (e.g. "v0.82.1")
+    # OpenMoHAA uses the "-beta" suffix in release names to indicate beta status
+    LATEST_RELEASE_JSON=$(curl -fsSL \
         -H "Accept: application/vnd.github+json" \
-        "https://api.github.com/repos/${UPSTREAM_REPO}/releases/latest" \
-        | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)
-    log "Latest upstream version: $OPENMOHAA_VERSION"
+        "https://api.github.com/repos/${UPSTREAM_REPO}/releases/latest")
+
+    # Use jq if available (more robust), fallback to grep
+    if command -v jq >/dev/null 2>&1; then
+        OPENMOHAA_TAG=$(echo "$LATEST_RELEASE_JSON" | jq -r '.tag_name // empty')
+        OPENMOHAA_VERSION=$(echo "$LATEST_RELEASE_JSON" | jq -r '.name // empty')
+    else
+        OPENMOHAA_TAG=$(echo "$LATEST_RELEASE_JSON" | grep -oE '"tag_name": *"[^"]*"' | head -1 | sed 's/.*: *"//;s/"$//')
+        OPENMOHAA_VERSION=$(echo "$LATEST_RELEASE_JSON" | grep -oE '"name": *"[^"]*"' | head -1 | sed 's/.*: *"//;s/"$//')
+    fi
+
+    # Fallback to tag_name if name is empty
+    [ -z "$OPENMOHAA_VERSION" ] && OPENMOHAA_VERSION="$OPENMOHAA_TAG"
+    log "Latest upstream version: $OPENMOHAA_VERSION (tag: $OPENMOHAA_TAG)"
 fi
 
-# Build download URL
-# OpenMoHAA uses tags like "v0.82.1" but the zip uses "v0.82.1" in filename
-DOWNLOAD_URL="https://github.com/${UPSTREAM_REPO}/releases/download/${OPENMOHAA_VERSION}/openmohaa-${OPENMOHAA_VERSION}-linux-${OPENMOHAA_ARCH}.zip"
+# Build download URL using the TAG (not the display version with -beta suffix)
+DOWNLOAD_URL="https://github.com/${UPSTREAM_REPO}/releases/download/${OPENMOHAA_TAG}/openmohaa-${OPENMOHAA_TAG}-linux-${OPENMOHAA_ARCH}.zip"
 
 log "Downloading: $DOWNLOAD_URL"
 cd "$BUILDDIR"
@@ -187,7 +199,7 @@ esac
 WRAPPER
 chmod +x "$ROOTFS/usr/bin/openmohaa"
 
-# Create desktop file and icon (OpenMoHAA doesn't ship them, use simple ones)
+# Create desktop file and download the official OpenMoHAA icon
 mkdir -p "$ROOTFS/usr/share/applications"
 mkdir -p "$ROOTFS/usr/share/icons/hicolor/scalable/apps"
 
@@ -206,14 +218,22 @@ X-AppImage-Version=${OPENMOHAA_VERSION}
 X-AppImage-Arch=${ARCH}
 DESKTOP
 
-# Simple SVG icon (openmohaa logo placeholder)
-cat > "$ROOTFS/usr/share/icons/hicolor/scalable/apps/org.openmoh.openmohaa.svg" <<'SVG'
+# Download the official OpenMoHAA icon from the upstream repo
+log "Downloading official OpenMoHAA icon..."
+ICON_URL="https://raw.githubusercontent.com/${UPSTREAM_REPO}/main/misc/openmohaa.svg"
+if curl -fSL --retry 3 -o "$ROOTFS/usr/share/icons/hicolor/scalable/apps/org.openmoh.openmohaa.svg" "$ICON_URL"; then
+    log "  Downloaded official icon ($(wc -c < "$ROOTFS/usr/share/icons/hicolor/scalable/apps/org.openmoh.openmohaa.svg") bytes)"
+else
+    err "  WARNING: Failed to download official icon, using fallback"
+    # Fallback: simple SVG if download fails
+    cat > "$ROOTFS/usr/share/icons/hicolor/scalable/apps/org.openmoh.openmohaa.svg" <<'SVG'
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
   <rect width="128" height="128" fill="#1a3a5c"/>
   <text x="64" y="80" font-family="sans-serif" font-size="48" font-weight="bold" text-anchor="middle" fill="#d4af37">M</text>
 </svg>
 SVG
+fi
 
 log "Installed files:"
 find "$ROOTFS" -type f | head -20
