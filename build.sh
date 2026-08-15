@@ -450,23 +450,27 @@ log "  Total bundled libraries: $LIB_COUNT"
 log "Generating checksums..."
 ( cd "$DISTDIR" && sha256sum "$OUTNAME" > "${OUTNAME}.sha256" )
 
-# Copy appinfo to workflow root so make-stable-appimage-release can find it
-# This file is required by pkgforge-dev/make-stable-appimage-release@v1
-if [ -f "$DISTDIR/appinfo" ]; then
-    cp -v "$DISTDIR/appinfo" "${WORKDIR}/appinfo"
-    log "Copied appinfo to workflow root"
-    cat "$WORKDIR/appinfo"
-else
-    err "WARNING: appinfo not found in dist/ - release job may fail"
-fi
+# Generate/fix appinfo file - make-stable-appimage-release@v1 requires this file
+# with the correct version. uruntime generates it from the .desktop file, but
+# sometimes the version comes out as UNKNOWN. We overwrite it to be sure.
+log "Generating appinfo file..."
+cat > "$DISTDIR/appinfo" <<APPINFO
+X-AppImage-Name=OpenMoHAA
+X-AppImage-Version=${OPENMOHAA_VERSION}
+X-AppImage-Arch=${ARCH}
+APPINFO
+log "appinfo content:"
+cat "$DISTDIR/appinfo"
 
-# Also copy the .zsync file if it was generated (enables delta updates)
+# Verify .zsync file was generated (enables delta updates via UPINFO)
 if ls "$DISTDIR"/*.zsync 2>/dev/null | head -1 | grep -q .; then
     log "Zsync file generated: $(ls "$DISTDIR"/*.zsync 2>/dev/null | head -1 | xargs basename)"
 else
     warn "No .zsync file found - auto-update via zsync will not work"
-    warn "Check that UPINFO is set correctly in build.sh"
 fi
+
+log "Files in dist/:"
+ls -lh "$DISTDIR/"
 
 # ---------------------------------------------------------------------------
 # Summary
