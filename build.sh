@@ -402,20 +402,29 @@ APPIMAGE="${DISTDIR}/${OUTNAME}"
 
 log "AppImage: $(ls -lh "$APPIMAGE" | awk '{print $5, $9}')"
 
-# Verify
-EXTRACT_DIR="${BUILDDIR}/squashfs-root"
-rm -rf "$EXTRACT_DIR"
-( cd "$BUILDDIR" && "$APPIMAGE" --appimage-extract >/dev/null 2>&1 ) || true
+# Verify - check the AppDir directly (extracting the AppImage fails in CI containers
+# because FUSE is not available in Docker. The AppDir has the same content).
+log "Verifying bundling (from AppDir)..."
 
-log "Verifying bundling..."
-[ -f "$EXTRACT_DIR/lib/ld-linux-${ARCH}.so.2" ] && log "  OK: ld-linux bundled" || err "  FAIL: ld-linux missing"
-[ -f "$EXTRACT_DIR/lib/libc.so.6" ] && log "  OK: libc bundled" || err "  FAIL: libc missing"
-[ -f "$EXTRACT_DIR/bin/openmohaa-portable-paths.hook" ] && log "  OK: portable hook"
-[ -L "$EXTRACT_DIR/bin/openmohaa" ] && log "  OK: bin/openmohaa symlink"
+if [ -f "$APPDIR/lib/ld-linux-${ARCH}.so.2" ]; then
+    log "  OK: ld-linux bundled"
+else
+    # ld-linux might have a different name on some systems, check alternatives
+    if ls "$APPDIR/lib"/ld-linux-*"$ARCH"* 2>/dev/null | head -1 | grep -q .; then
+        log "  OK: ld-linux bundled (alternative name: $(ls "$APPDIR/lib"/ld-linux-*"$ARCH"* 2>/dev/null | head -1 | xargs basename))"
+    elif ls "$APPDIR/lib"/ld-musl-*"$ARCH"* 2>/dev/null | head -1 | grep -q .; then
+        log "  OK: ld-musl bundled (musl libc)"
+    else
+        err "  FAIL: ld-linux missing"
+    fi
+fi
+
+[ -f "$APPDIR/lib/libc.so.6" ] && log "  OK: libc bundled" || err "  FAIL: libc missing"
+[ -f "$APPDIR/bin/openmohaa-portable-paths.hook" ] && log "  OK: portable hook"
 
 # CRITICAL: verify game modules are in bin/ (OpenMoHAA dlopens them from there)
 for _mod in cgame.so game.so; do
-    if [ -f "$EXTRACT_DIR/bin/$_mod" ]; then
+    if [ -f "$APPDIR/bin/$_mod" ]; then
         log "  OK: bin/$_mod present (OpenMoHAA will find it)"
     else
         err "  FAIL: bin/$_mod missing - game will crash with 'Couldn't load game'!"
@@ -423,7 +432,16 @@ for _mod in cgame.so game.so; do
     fi
 done
 
-LIB_COUNT=$(find "$EXTRACT_DIR/lib" -maxdepth 1 -type f 2>/dev/null | wc -l)
+# Verify critical libs from the upstream zip are bundled
+for _lib in libSDL2-2.0.so.0 libopenal.so.1 libcurl.so.4; do
+    if find "$APPDIR/lib" -name "$_lib*" 2>/dev/null | head -1 | grep -q .; then
+        log "  OK: $_lib bundled"
+    else
+        err "  FAIL: $_lib missing"
+    fi
+done
+
+LIB_COUNT=$(find "$APPDIR/lib" -maxdepth 1 -type f 2>/dev/null | wc -l)
 log "  Total bundled libraries: $LIB_COUNT"
 
 log "Generating checksums..."
