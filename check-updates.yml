@@ -1,0 +1,87 @@
+name: Check Updates
+
+on:
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force Issue even if no new version'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['true', 'false']
+
+permissions:
+  issues: write
+  contents: read
+  actions: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Detect new version
+        id: detect
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE_ISSUE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          UPSTREAM_REPO="openmoh/openmohaa"
+          LAST_BUILT=""
+          [ -f ./VERSION ] && LAST_BUILT="$(tr -d '[:space:]' < ./VERSION)"
+          LATEST_TAG=$(curl -fsSL -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            "https://api.github.com/repos/${UPSTREAM_REPO}/releases/latest" \
+            | jq -r '.tag_name // empty')
+          LATEST_COMMIT=$(curl -fsSL -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            "https://api.github.com/repos/${UPSTREAM_REPO}/commits/main" \
+            | jq -r '.sha // empty' | cut -c1-12)
+          if [ -n "$LATEST_TAG" ]; then NEW_VERSION="$LATEST_TAG"
+          elif [ -n "$LATEST_COMMIT" ]; then NEW_VERSION="main@${LATEST_COMMIT}"
+          else echo "::error::Could not determine upstream version"; exit 1; fi
+          SHOULD_NOTIFY="false"
+          if [ "${FORCE_ISSUE}" = "true" ]; then SHOULD_NOTIFY="true"
+          elif [ -z "$LAST_BUILT" ]; then SHOULD_NOTIFY="true"
+          elif [ "$NEW_VERSION" != "$LAST_BUILT" ]; then SHOULD_NOTIFY="true"; fi
+          echo "new_version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "last_built=${LAST_BUILT}" >> "$GITHUB_OUTPUT"
+          echo "should_notify=${SHOULD_NOTIFY}" >> "$GITHUB_OUTPUT"
+      - name: Open Issue
+        if: steps.detect.outputs.should_notify == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          NEW_VERSION="${{ steps.detect.outputs.new_version }}"
+          gh label create "upstream-update" --repo "${{ github.repository }}" \
+            --description "New upstream version available" --color "0E8A16" 2>/dev/null || true
+          gh issue create --repo "${{ github.repository }}" \
+            --title "New upstream version available: ${NEW_VERSION}" \
+            --body "New version detected: ${NEW_VERSION}. Run the Build AppImage workflow to update." \
+            --label "upstream-update"
+      - name: Auto-trigger build (optional)
+        if: steps.detect.outputs.should_notify == 'true' && vars.AUTO_BUILD == '1'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          COMMIT="${{ steps.detect.outputs.upstream_commit }}"
+          gh workflow run appimage.yml --repo "${{ github.repository }}" -f openmohaa_ref="${COMMIT}"
+      - name: Close resolved Issues
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LAST_BUILT="${{ steps.detect.outputs.last_built }}"
+          [ -z "$LAST_BUILT" ] && exit 0
+          gh issue list --repo "${{ github.repository }}" --state open \
+            --label "upstream-update" --json number,title --limit 50 \
+            | jq -r --arg v "$LAST_BUILT" '.[] | select(.title | test($v)) | .number' \
+            | while read -r NUM; do
+                gh issue close "$NUM" --repo "${{ github.repository }}" \
+                  --comment "Closed: version $LAST_BUILT has been built."
+              done
