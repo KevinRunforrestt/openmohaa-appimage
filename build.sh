@@ -60,9 +60,8 @@ trap 'err "Build failed at line $LINENO (exit code: $?)"' ERR
 section "STEP 1/5: Install runtime dependencies"
 
 # anylinux-setup-action already installed: base-devel, git, wget, patchelf,
-# strace, xorg-server-xvfb, etc. We only need SDL2/OpenAL runtime libs for
-# quick-sharun to bundle (the upstream zip already includes libSDL2, libopenal,
-# libcurl, but we want the full dep tree for portability).
+# strace, xorg-server-xvfb, etc. We install SDL2/OpenAL runtime libs so
+# quick-sharun can bundle the full dependency tree for portability.
 log "Installing runtime dependencies..."
 pacman -S --noconfirm --needed --overwrite '*' \
     sdl2 \
@@ -79,7 +78,6 @@ pacman -S --noconfirm --needed --overwrite '*' \
     glu \
     libglvnd \
     libdrm \
-    libgbm \
     wayland \
     libxkbcommon \
     libdecor \
@@ -233,11 +231,19 @@ export APPDIR
 [ -f "$DESKTOP" ] || { err "Desktop not found"; exit 1; }
 
 # Find all binaries and shared libraries to bundle
+# IMPORTANT: OpenMoHAA's pre-built binary has NEEDED entries for libSDL2-2.0.so.0,
+# libopenal.so.1, libcurl.so.4 but NO RPATH. These libs are shipped in the same
+# directory as the binary in the upstream zip. We MUST pass them to quick-sharun
+# explicitly so they get bundled (otherwise quick-sharun reports "missing libraries").
 BINARIES_TO_BUNDLE=$(find "$ROOTFS/usr/lib/openmohaa" \
     \( -type f -executable -o -name "*.so" -o -name "*.so.*" \) | sort)
 
 log "Binaries/libraries to bundle:"
 echo "$BINARIES_TO_BUNDLE" | sed 's/^/  /'
+
+# Also make sure the .so files from the zip are executable (quick-sharun needs this
+# to run ldd on them; without +x, ldd fails with "warning: you do not have execution permission")
+chmod +x "$ROOTFS/usr/lib/openmohaa"/*.so* 2>/dev/null || true
 
 log "Running quick-sharun (deploys libc, ld-linux, dlopened libs, etc.)..."
 # shellcheck disable=SC2086
