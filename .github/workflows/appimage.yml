@@ -27,6 +27,9 @@ jobs:
         include:
           - runs-on: ubuntu-latest
             arch: x86_64
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      commit: ${{ steps.version.outputs.commit }}
     steps:
       - uses: actions/checkout@v4
       - name: Prepare Arch Linux container
@@ -97,41 +100,3 @@ jobs:
             like [AM](https://github.com/ivan-hc/AM), [soar](https://github.com/pkgforge/soar),
             or [AppImageUpdate](https://github.com/AppImage/AppImageUpdate) will use it
             to download only the changed bytes when updating.
-
-  commit:
-    name: Update VERSION
-    if: ${{ github.ref_name == 'main' }}
-    needs: [build]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-      - uses: actions/download-artifact@v4
-        with:
-          name: AppImage-x86_64
-          path: ./artifact
-          merge-multiple: true
-      - name: Update VERSION file
-        run: |
-          # LATEST_VERSION is in the artifact root (was copied to dist/ in build.sh)
-          VERSION_FILE="./artifact/LATEST_VERSION"
-          if [ ! -f "$VERSION_FILE" ]; then
-            echo "::error::LATEST_VERSION file not found in artifact!"
-            echo "Contents of ./artifact/:"
-            ls -la ./artifact/ || true
-            exit 1
-          fi
-          VERSION="$(tr -d '[:space:]' < "$VERSION_FILE")"
-          echo "Updating VERSION to: ${VERSION}"
-          echo "$VERSION" > VERSION
-      - name: Commit VERSION
-        uses: stefanzweifel/git-auto-commit-action@v4
-        with:
-          commit_message: "chore: bump VERSION to ${{ needs.build.outputs.version }}"
-          file_pattern: "VERSION"
-          commit_user_name: "github-actions[bot]"
-          commit_user_email: "github-actions[bot]@users.noreply.github.com"
