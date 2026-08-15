@@ -117,7 +117,15 @@ jobs:
           merge-multiple: true
       - name: Update VERSION file
         run: |
-          VERSION="$(tr -d '[:space:]' < ./artifact/LATEST_VERSION)"
+          # LATEST_VERSION is in the artifact root (was copied to dist/ in build.sh)
+          VERSION_FILE="./artifact/LATEST_VERSION"
+          if [ ! -f "$VERSION_FILE" ]; then
+            echo "::error::LATEST_VERSION file not found in artifact!"
+            echo "Contents of ./artifact/:"
+            ls -la ./artifact/ || true
+            exit 1
+          fi
+          VERSION="$(tr -d '[:space:]' < "$VERSION_FILE")"
           echo "Updating VERSION to: ${VERSION}"
           echo "$VERSION" > VERSION
       - name: Commit VERSION
