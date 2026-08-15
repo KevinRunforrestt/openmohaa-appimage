@@ -56,16 +56,71 @@ trap 'err "Build failed at line $LINENO (exit code: $?)"' ERR
 # ---------------------------------------------------------------------------
 section "STEP 1/6: Install build dependencies"
 
-pacman -Syu --noconfirm --needed \
-    base-devel cmake ninja git wget curl strace patchelf flex bison \
-    sdl2 sdl2_ttf sdl2_image sdl2_mixer openal libvorbis libogg opus flac \
-    libmad curl libpulse pipewire-audio pipewire-jack alsa-lib mesa glu \
-    vulkan-icd-loader vulkan-headers libglvnd libdrm libgbm wayland \
-    wayland-protocols libxkbcommon libdecor xorg-server-xvfb libx11 libxext \
-    libxcursor libxi libxfixes libxrandr libxss libxinerama libxrender \
-    libxcb libxau libxdmcp 2>&1 | tail -10 || true
+# anylinux-setup-action already installed: base-devel, git, wget, patchelf,
+# pulseaudio, xorg-server-xvfb, etc. We only need to install what's MISSING
+# for OpenMoHAA compilation: cmake, ninja, SDL2, OpenAL, codecs, etc.
+log "Installing OpenMoHAA build dependencies..."
+pacman -S --noconfirm --needed --overwrite '*' \
+    cmake \
+    ninja \
+    strace \
+    flex \
+    bison \
+    sdl2 \
+    sdl2_ttf \
+    sdl2_image \
+    sdl2_mixer \
+    openal \
+    libvorbis \
+    libogg \
+    opus \
+    flac \
+    libmad \
+    curl \
+    libpulse \
+    pipewire-audio \
+    pipewire-jack \
+    alsa-lib \
+    mesa \
+    glu \
+    vulkan-icd-loader \
+    vulkan-headers \
+    libglvnd \
+    libdrm \
+    libgbm \
+    wayland \
+    wayland-protocols \
+    libxkbcommon \
+    libdecor \
+    libx11 \
+    libxext \
+    libxcursor \
+    libxi \
+    libxfixes \
+    libxrandr \
+    libxss \
+    libxinerama \
+    libxrender \
+    libxcb \
+    libxau \
+    libxdmcp \
+    || {
+        err "pacman failed to install dependencies"
+        err "Trying to continue anyway (some packages may already be present)"
+    }
+
+log "Verifying critical tools..."
+for _tool in cmake ninja flex bison strace; do
+    if command -v "$_tool" >/dev/null 2>&1; then
+        log "  OK: $_tool -> $(command -v $_tool)"
+    else
+        err "  MISSING: $_tool"
+        exit 1
+    fi
+done
 
 if command -v get-debloated-pkgs >/dev/null 2>&1; then
+    log "Installing debloated packages..."
     get-debloated-pkgs --add-mesa --prefer-nano   || warn "debloat mesa failed"
     get-debloated-pkgs --add-common --prefer-nano || warn "debloat common failed"
 fi
