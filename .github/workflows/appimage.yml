@@ -65,6 +65,8 @@ jobs:
           path: |
             dist/*.AppImage
             dist/*.AppImage.sha256
+            dist/*.AppImage.zsync
+            dist/appinfo
             LATEST_VERSION
             LATEST_COMMIT
           if-no-files-found: error
@@ -84,6 +86,17 @@ jobs:
           pattern: AppImage-*
           merge-multiple: true
           path: ./dist
+      - name: Copy appinfo to workflow root
+        run: |
+          # make-stable-appimage-release expects ./appinfo in the working directory
+          if [ -f ./dist/appinfo ]; then
+            cp ./dist/appinfo ./appinfo
+            echo "appinfo content:"
+            cat ./appinfo
+          else
+            echo "::error::appinfo file not found in artifact!"
+            exit 1
+          fi
       - name: Read version
         id: version
         run: |
@@ -91,7 +104,7 @@ jobs:
           COMMIT="$(tr -d '[:space:]' < ./dist/LATEST_COMMIT 2>/dev/null || echo unknown)"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "commit=${COMMIT}" >> "$GITHUB_OUTPUT"
-      - name: Create release
+      - name: Create GitHub Release with zsync
         uses: pkgforge-dev/make-stable-appimage-release@v1
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -110,9 +123,16 @@ jobs:
             mkdir main  # put your .pk3 files here
             ./openmohaa-x86_64.AppImage
             ```
+
+            ## Auto-update
+            This release includes a `.zsync` file for delta updates. AppImage managers
+            like [AM](https://github.com/ivan-hc/AM), [soar](https://github.com/pkgforge/soar),
+            or [AppImageUpdate](https://github.com/AppImage/AppImageUpdate) will use it
+            to download only the changed bytes when updating.
           release_files: |
             dist/*.AppImage
             dist/*.AppImage.sha256
+            dist/*.AppImage.zsync
 
   commit:
     name: Update VERSION
