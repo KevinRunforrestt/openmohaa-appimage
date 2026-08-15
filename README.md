@@ -1,62 +1,39 @@
 <div align="center">
 
-# OpenMoHAA AppImage 🎮🐧
+# OpenMohaa-AppImage 🐧
 
-[![Latest Release](https://img.shields.io/github/v/release/<OWNER>/<REPO>)](https://github.com/<OWNER>/<REPO>/releases/latest)
-[![CI Build](https://github.com/<OWNER>/<REPO>/actions/workflows/appimage.yml/badge.svg)](https://github.com/<OWNER>/<REPO>/actions/workflows/appimage.yml)
-[![Upstream](https://img.shields.io/badge/upstream-openmoh%2Fopenmohaa-blue)](https://github.com/openmoh/openmohaa)
+[![GitHub Downloads](https://img.shields.io/github/downloads/KevinRunforrestt/openmohaa-appimage/total?logo=github&label=GitHub%20Downloads)](https://github.com/KevinRunforrestt/openmohaa-appimage/releases/latest)
+[![CI Build Status](https://github.com/KevinRunforrestt/openmohaa-appimage/actions/workflows/appimage.yml/badge.svg)](https://github.com/KevinRunforrestt/openmohaa-appimage/releases/latest)
+[![Latest Stable Release](https://img.shields.io/github/v/release/KevinRunforrestt/openmohaa-appimage)](https://github.com/KevinRunforrestt/openmohaa-appimage/releases/latest)
+
+<p align="center">
+  <img src="https://github.com/openmoh/openmohaa/blob/main/misc/openmohaa.svg" width="128" />
+</p>
+
+| Latest Stable Release | Upstream URL |
+| :---: | :---: |
+| [Click here](https://github.com/KevinRunforrestt/openmohaa-appimage/releases/latest) | [Click here](https://github.com/openmoh/openmohaa) |
 
 </div>
 
 ---
 
-AppImage portable de [OpenMoHAA](https://github.com/openmoh/openmohaa) construido con la metodología
-[Anylinux-AppImages](https://github.com/pkgforge-dev/Anylinux-AppImages). Empaqueta todo
-(libc, ld-linux, SDL2, OpenGL, audio, X11, Wayland) y funciona en cualquier Linux.
+AppImage made using [sharun](https://github.com/VHSgunzo/sharun) and its wrapper [quick-sharun](https://github.com/pkgforge-dev/Anylinux-AppImages/blob/main/useful-tools/quick-sharun.sh), which makes it extremely easy to turn any binary into a portable package reliably without using containers or similar tricks. 
 
-## 📥 Descarga
+**This AppImage bundles everything and it should work on any Linux distro, including old and musl-based ones.**
 
-```bash
-wget https://github.com/<OWNER>/<REPO>/releases/latest/download/openmohaa-x86_64.AppImage
-chmod +x openmohaa-x86_64.AppImage
-```
+This AppImage doesn't require FUSE to run at all, thanks to the [uruntime](https://github.com/VHSgunzo/uruntime).
 
-## 🎮 Uso
+This AppImage is also supplied with a self-updater by default, so any updates to this application won't be missed, you will be prompted for permission to check for updates and if agreed you will then be notified when a new update is available.
 
-El AppImage detecta automáticamente los assets en una carpeta `main/` junto al `.AppImage`:
+Self-updater is disabled by default if AppImage managers like [am](https://github.com/ivan-hc/AM), [soar](https://github.com/pkgforge/soar) or [dbin](https://github.com/xplshn/dbin) exist, which manage AppImage updates.
 
-```
-~/games/openmohaa/
-├── openmohaa-x86_64.AppImage
-└── main/
-    ├── Pak0.pk3      ← assets originales de MoHAA
-    ├── Pak1.pk3
-    └── ...
-```
+<details>
+  <summary><b><i>raison d'être</i></b></summary>
+    <img src="https://github.com/user-attachments/assets/d40067a6-37d2-4784-927c-2c7f7cc6104b" alt="Inspiration Image">
+  </a>
+</details>
 
-```bash
-cd ~/games/openmohaa
-./openmohaa-x86_64.AppImage                    # Cliente
-./openmohaa-x86_64.AppImage omohaaded +quit    # Servidor dedicado
-```
+---
 
-Los archivos `.pk3` se obtienen de una copia original de Medal of Honor: Allied Assault.
-
-## 🔧 Características
-
-- **Portable**: detecta assets junto al AppImage (no en rutas fijas del home)
-- **Auto-seed**: crea `main/cgame.so` y `main/game.so` automáticamente
-- **Universal**: funciona en glibc antiguo, musl (Alpine), NixOS
-- **Sin FUSE**: cae a extract-and-run si FUSE no está disponible
-- **Todos los deps bundlados**: libc, ld-linux, SDL2, OpenGL, ALSA, PulseAudio, X11, Wayland
-
-## 🔄 CI/CD
-
-- **`appimage.yml`**: build manual o automático (workflow_dispatch, repository_dispatch)
-- **`check-updates.yml`**: cron diario que abre un Issue si hay nueva versión upstream
-
-Setear variable `AUTO_BUILD=1` en el repo para auto-trigger del build cuando se detecten updates.
-
-## 📜 Licencia
-
-OpenMoHAA se distribuye bajo su propia licencia (ver [upstream](https://github.com/openmoh/openmohaa)).
+More at: [AnyLinux-AppImages](https://pkgforge-dev.github.io/Anylinux-AppImages/)
