@@ -140,8 +140,16 @@ else
 
     # Fallback to tag_name if name is empty
     [ -z "$OPENMOHAA_VERSION" ] && OPENMOHAA_VERSION="$OPENMOHAA_TAG"
+    [ -z "$OPENMOHAA_TAG" ] && { err "Could not determine upstream version"; exit 1; }
     log "Latest upstream version: $OPENMOHAA_VERSION (tag: $OPENMOHAA_TAG)"
 fi
+
+# CRITICAL: Ensure OPENMOHAA_VERSION is never empty (would cause UNKNOWN in appinfo)
+if [ -z "$OPENMOHAA_VERSION" ]; then
+    err "OPENMOHAA_VERSION is empty! Using fallback."
+    OPENMOHAA_VERSION="$OPENMOHAA_TAG"
+fi
+log "Final version: OPENMOHAA_VERSION=$OPENMOHAA_VERSION, OPENMOHAA_TAG=$OPENMOHAA_TAG"
 
 # Build download URL using the TAG (not the display version with -beta suffix)
 DOWNLOAD_URL="https://github.com/${UPSTREAM_REPO}/releases/download/${OPENMOHAA_TAG}/openmohaa-${OPENMOHAA_TAG}-linux-${OPENMOHAA_ARCH}.zip"
@@ -162,14 +170,22 @@ unzip -o openmohaa.zip -d extracted/ >/dev/null
 log "Extracted files:"
 ls -la extracted/
 
-# Save version info
+# Save version info - write to both WORKDIR root and dist/ so it's included
+# in the artifact upload (which uses path: dist)
+mkdir -p "${WORKDIR}/dist"
 echo "$OPENMOHAA_VERSION" > "${WORKDIR}/LATEST_VERSION"
+echo "$OPENMOHAA_VERSION" > "${WORKDIR}/dist/LATEST_VERSION"
+log "Version: $OPENMOHAA_VERSION (saved to LATEST_VERSION)"
+
 # Get commit hash if possible (not critical if it fails)
 OPENMOHAA_COMMIT=$(curl -fsSL \
     -H "Accept: application/vnd.github+json" \
     "https://api.github.com/repos/${UPSTREAM_REPO}/commits/main" 2>/dev/null \
-    | sed -n 's/.*"sha": *"\([0-9a-f]\{12\}\).*/\1/p' | head -1 || echo "unknown")
+    | jq -r '.sha // empty' 2>/dev/null | cut -c1-12 || echo "unknown")
+[ -z "$OPENMOHAA_COMMIT" ] && OPENMOHAA_COMMIT="unknown"
 echo "$OPENMOHAA_COMMIT" > "${WORKDIR}/LATEST_COMMIT"
+echo "$OPENMOHAA_COMMIT" > "${WORKDIR}/dist/LATEST_COMMIT"
+log "Commit: $OPENMOHAA_COMMIT"
 
 # ---------------------------------------------------------------------------
 # STEP 3: Install into rootfs (simulating /usr layout)
