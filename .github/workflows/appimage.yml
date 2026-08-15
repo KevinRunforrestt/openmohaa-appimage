@@ -21,17 +21,12 @@ jobs:
     name: Build AppImage (${{ matrix.arch }})
     runs-on: ${{ matrix.runs-on }}
     container: ghcr.io/pkgforge-dev/archlinux:latest
-    permissions:
-      contents: read
     strategy:
       fail-fast: false
       matrix:
         include:
           - runs-on: ubuntu-latest
             arch: x86_64
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-      commit: ${{ steps.version.outputs.commit }}
     steps:
       - uses: actions/checkout@v4
       - name: Prepare Arch Linux container
@@ -62,57 +57,30 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: AppImage-${{ matrix.arch }}
-          path: |
-            dist/*.AppImage
-            dist/*.AppImage.sha256
-            dist/*.AppImage.zsync
-            dist/appinfo
-            LATEST_VERSION
-            LATEST_COMMIT
+          path: dist
           if-no-files-found: error
           retention-days: 30
 
   release:
     name: Release AppImage
-    if: ${{ github.ref_name == github.event.repository.default_branch }}
+    if: ${{ github.ref_name == 'main' }}
     needs: [build]
+    permissions: write-all
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
-      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           pattern: AppImage-*
           merge-multiple: true
-          path: ./dist
-      - name: Copy appinfo to workflow root
-        run: |
-          # make-stable-appimage-release expects ./appinfo in the working directory
-          if [ -f ./dist/appinfo ]; then
-            cp ./dist/appinfo ./appinfo
-            echo "appinfo content:"
-            cat ./appinfo
-          else
-            echo "::error::appinfo file not found in artifact!"
-            exit 1
-          fi
-      - name: Read version
-        id: version
-        run: |
-          VERSION="$(tr -d '[:space:]' < ./dist/LATEST_VERSION 2>/dev/null || echo nightly)"
-          COMMIT="$(tr -d '[:space:]' < ./dist/LATEST_COMMIT 2>/dev/null || echo unknown)"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "commit=${COMMIT}" >> "$GITHUB_OUTPUT"
-      - name: Create GitHub Release with zsync
+      - name: Release AppImage
         uses: pkgforge-dev/make-stable-appimage-release@v1
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          release_name: "OpenMoHAA ${{ steps.version.outputs.version }}"
+          release_name: "OpenMoHAA ${{ needs.build.outputs.version }}"
           release_body: |
-            # OpenMoHAA ${{ steps.version.outputs.version }}
+            # OpenMoHAA ${{ needs.build.outputs.version }}
 
-            Upstream commit: `${{ steps.version.outputs.commit }}`
+            Upstream commit: `${{ needs.build.outputs.commit }}`
 
             Portable AppImage with all deps bundled (libc, ld-linux, SDL2, OpenGL, audio, X11, Wayland).
             Place .pk3 assets in main/ next to the AppImage.
@@ -129,14 +97,10 @@ jobs:
             like [AM](https://github.com/ivan-hc/AM), [soar](https://github.com/pkgforge/soar),
             or [AppImageUpdate](https://github.com/AppImage/AppImageUpdate) will use it
             to download only the changed bytes when updating.
-          release_files: |
-            dist/*.AppImage
-            dist/*.AppImage.sha256
-            dist/*.AppImage.zsync
 
   commit:
     name: Update VERSION
-    if: ${{ github.ref_name == github.event.repository.default_branch }}
+    if: ${{ github.ref_name == 'main' }}
     needs: [build]
     runs-on: ubuntu-latest
     permissions:
