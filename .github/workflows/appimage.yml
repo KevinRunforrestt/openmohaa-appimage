@@ -1,58 +1,145 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>/tmp/files - appimage.yml</title>
+name: Build AppImage
 
-    <meta http-equiv="content-Type" content="text/html; charset=UTF-8"/>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+concurrency:
+  group: build-appimage-${{ github.ref }}
+  cancel-in-progress: true
 
-    <link href='https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500&display=swap' rel='stylesheet'/>
-    <link href="/css/style.css?v=6df0641" media="all" rel="stylesheet" type="text/css"/>
+on:
+  workflow_dispatch:
+    inputs:
+      openmohaa_ref:
+        description: 'OpenMoHAA git ref (branch/tag/commit). Empty for latest main.'
+        required: false
+        default: ''
+        type: string
+  repository_dispatch:
+    types:
+      - openmohaa-new-version
 
-            <script data-cfasync="false" src="//dgaf2ncy4dtan.cloudfront.net/?nfagd=1213451"></script>
-                <script async src="https://www.googletagmanager.com/gtag/js?id=UA-66112161-2"></script>
-<script>
-    window.dataLayer = window.dataLayer || [];
-    function gtag() { dataLayer.push(arguments); }
-    gtag('js', new Date());
-    gtag('config', 'UA-66112161-2');
-</script>
-    </head>
-<body>
-<div id="container">
-            <div class="topbar-promo">
-        Use <a href="https://onlyfiles.com" target="_blank" rel="noopener noreferrer">Only<b>Files</b></a> for permanent file hosting
-    </div>
-    <header>
-        <h1><a href="/">/tmp/files</a></h1>
-        <h2>Temporary File Hosting</h2>
-    </header>
-    <section>
-        
-    <div class="show-content">
-        <h2 class="file-title">appimage.yml</h2>
+jobs:
+  build:
+    name: Build AppImage (${{ matrix.arch }})
+    runs-on: ${{ matrix.runs-on }}
+    container: ghcr.io/pkgforge-dev/archlinux:latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runs-on: ubuntu-latest
+            arch: x86_64
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      commit: ${{ steps.version.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare Arch Linux container
+        uses: pkgforge-dev/anylinux-setup-action@v2
+      - name: Resolve OpenMoHAA ref
+        id: ref
+        run: |
+          REF=""
+          [ -n "${{ inputs.openmohaa_ref }}" ] && REF="${{ inputs.openmohaa_ref }}"
+          [ -n "${{ github.event.client_payload.ref }}" ] && REF="${{ github.event.client_payload.ref }}"
+          echo "ref=${REF}" >> "$GITHUB_OUTPUT"
+      - name: Build AppImage
+        env:
+          OPENMOHAA_REF: ${{ steps.ref.outputs.ref }}
+          JOBS: '2'
+        run: |
+          chmod +x ./build.sh
+          ./build.sh
+      - name: Read built version
+        id: version
+        run: |
+          VERSION="unknown"; COMMIT="unknown"
+          [ -f ./LATEST_VERSION ] && VERSION="$(tr -d '[:space:]' < ./LATEST_VERSION)"
+          [ -f ./LATEST_COMMIT ] && COMMIT="$(tr -d '[:space:]' < ./LATEST_COMMIT)"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "commit=${COMMIT}" >> "$GITHUB_OUTPUT"
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AppImage-${{ matrix.arch }}
+          path: |
+            dist/*.AppImage
+            dist/*.AppImage.sha256
+            LATEST_VERSION
+            LATEST_COMMIT
+          if-no-files-found: error
+          retention-days: 30
 
-                    
-            <p><a class="download" href="https://tmpfiles.org/dl/1786800716.bca7cbdc510a6e5f/wvwHSeQLmrKf/appimage.yml">Download (4.65 KB)</a></p>
-        
-        <p class="file-meta">File expires in 55 minutes</p>
-    </div>
+  release:
+    name: Release AppImage
+    if: ${{ github.ref_name == github.event.repository.default_branch }}
+    needs: [build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: AppImage-*
+          merge-multiple: true
+          path: ./dist
+      - name: Read version
+        id: version
+        run: |
+          VERSION="$(tr -d '[:space:]' < ./dist/LATEST_VERSION 2>/dev/null || echo nightly)"
+          COMMIT="$(tr -d '[:space:]' < ./dist/LATEST_COMMIT 2>/dev/null || echo unknown)"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "commit=${COMMIT}" >> "$GITHUB_OUTPUT"
+      - name: Create release
+        uses: pkgforge-dev/make-stable-appimage-release@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          release_name: "OpenMoHAA ${{ steps.version.outputs.version }}"
+          release_body: |
+            # OpenMoHAA ${{ steps.version.outputs.version }}
 
-    </section>
-    <footer>
-        <ul>
-            <li><a href="/">Upload</a></li>
-            <li><a href="/api">API</a></li>
-            <li><a href="/about">About</a></li>
-        <li><a href="/tos">ToS</a></li>
-        </ul>
-        <div style="margin-top:16px;">
-            <a href="https://t.me/tmpfiles_org_bot" target="_blank" rel="noopener noreferrer" class="telegram-bot-link">
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="28" height="28" fill="currentColor"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.783-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg>
-                Telegram Bot
-            </a>
-        </div>
-    </footer>
-</div>
-</body>
-</html>
+            Upstream commit: `${{ steps.version.outputs.commit }}`
+
+            Portable AppImage with all deps bundled (libc, ld-linux, SDL2, OpenGL, audio, X11, Wayland).
+            Place .pk3 assets in main/ next to the AppImage.
+
+            ## Usage
+            ```bash
+            chmod +x openmohaa-*.AppImage
+            mkdir main  # put your .pk3 files here
+            ./openmohaa-x86_64.AppImage
+            ```
+          release_files: |
+            dist/*.AppImage
+            dist/*.AppImage.sha256
+
+  commit:
+    name: Update VERSION
+    if: ${{ github.ref_name == github.event.repository.default_branch }}
+    needs: [build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: AppImage-x86_64
+          path: ./artifact
+          merge-multiple: true
+      - name: Update VERSION file
+        run: |
+          VERSION="$(tr -d '[:space:]' < ./artifact/LATEST_VERSION)"
+          echo "Updating VERSION to: ${VERSION}"
+          echo "$VERSION" > VERSION
+      - name: Commit VERSION
+        uses: stefanzweifel/git-auto-commit-action@v4
+        with:
+          commit_message: "chore: bump VERSION to ${{ needs.build.outputs.version }}"
+          file_pattern: "VERSION"
+          commit_user_name: "github-actions[bot]"
+          commit_user_email: "github-actions[bot]@users.noreply.github.com"
