@@ -1,31 +1,33 @@
 #!/bin/bash
 # =============================================================================
-# build.sh - Build OpenMoHAA AppImage using Anylinux-AppImages methodology
+# build.sh - Build OpenMoHAA AppImage from upstream pre-built binaries
 # =============================================================================
+# Downloads the official OpenMoHAA release zip and packages it into a
+# portable AppImage using the Anylinux-AppImages methodology.
+#
+# No compilation needed - much faster and more reliable than building from source.
+# =============================================================================
+
 set -euo pipefail
 
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
 APP_NAME="openmohaa"
 APP_PRETTY="OpenMoHAA"
 UPSTREAM_REPO="openmoh/openmohaa"
-UPSTREAM_URL="https://github.com/${UPSTREAM_REPO}.git"
 ARCH=$(uname -m)
-JOBS="${JOBS:-$(nproc 2>/dev/null || echo 2)}"
 
-CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-Release}"
-BUILD_CLIENT="${BUILD_CLIENT:-ON}"
-BUILD_SERVER="${BUILD_SERVER:-ON}"
-BUILD_RENDERER_GL1="${BUILD_RENDERER_GL1:-ON}"
-BUILD_RENDERER_GL2="${BUILD_RENDERER_GL2:-ON}"
-BUILD_GAME_LIBRARIES="${BUILD_GAME_LIBRARIES:-ON}"
-BUILD_GAME_QVMS="${BUILD_GAME_QVMS:-ON}"
-USE_INTERNAL_LIBS="${USE_INTERNAL_LIBS:-ON}"
-USE_OPENAL="${USE_OPENAL:-ON}"
-USE_OPENAL_DLOPEN="${USE_OPENAL_DLOPEN:-ON}"
-USE_HTTP="${USE_HTTP:-ON}"
-USE_CODEC_VORBIS="${USE_CODEC_VORBIS:-ON}"
-USE_CODEC_OPUS="${USE_CODEC_OPUS:-ON}"
-USE_CODEC_MAD="${USE_CODEC_MAD:-ON}"
+# Map uname -m to OpenMoHAA's release naming
+case "$ARCH" in
+    x86_64)  OPENMOHAA_ARCH="amd64" ;;
+    aarch64) OPENMOHAA_ARCH="arm64" ;;
+    armv7l)  OPENMOHAA_ARCH="armhf" ;;
+    i686)    OPENMOHAA_ARCH="i686" ;;
+    *)       OPENMOHAA_ARCH="$ARCH" ;;
+esac
 
+# Quick-sharun options
 export ADD_HOOKS="${ADD_HOOKS:-}"
 export UPINFO="${UPINFO:-gh-releases-zsync|${GITHUB_REPOSITORY:-${APP_NAME}}|${GITHUB_REPOSITORY_NAME:-${APP_NAME}}|latest|*${ARCH}.AppImage.zsync}"
 export DEPLOY_OPENGL="${DEPLOY_OPENGL:-1}"
@@ -37,13 +39,14 @@ export ANYLINUX_LIB="${ANYLINUX_LIB:-1}"
 export STRIP="${STRIP:-1}"
 export DEBLOAT_LOCALE="${DEBLOAT_LOCALE:-1}"
 
+# Paths
 WORKDIR="${WORKDIR:-$(pwd)}"
 BUILDDIR="${WORKDIR}/build_work"
-SRC_DIR="${BUILDDIR}/src"
 ROOTFS="${BUILDDIR}/rootfs"
 APPDIR="${WORKDIR}/AppDir"
 DISTDIR="${WORKDIR}/dist"
 
+# Logging
 log()  { printf '\033[1;34m[build]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n'  "$*" >&2; }
 err()  { printf '\033[1;31m[err]\033[0m %s\n'   "$*" >&2; }
@@ -52,24 +55,17 @@ section() { printf '\n\033[1;36m========== %s ==========\033[0m\n' "$*"; }
 trap 'err "Build failed at line $LINENO (exit code: $?)"' ERR
 
 # ---------------------------------------------------------------------------
-# STEP 1: Install build dependencies (Arch Linux)
+# STEP 1: Install runtime dependencies (Arch Linux)
 # ---------------------------------------------------------------------------
-section "STEP 1/6: Install build dependencies"
+section "STEP 1/5: Install runtime dependencies"
 
 # anylinux-setup-action already installed: base-devel, git, wget, patchelf,
-# pulseaudio, xorg-server-xvfb, etc. We only need to install what's MISSING
-# for OpenMoHAA compilation: cmake, ninja, SDL2, OpenAL, codecs, etc.
-log "Installing OpenMoHAA build dependencies..."
+# strace, xorg-server-xvfb, etc. We only need SDL2/OpenAL runtime libs for
+# quick-sharun to bundle (the upstream zip already includes libSDL2, libopenal,
+# libcurl, but we want the full dep tree for portability).
+log "Installing runtime dependencies..."
 pacman -S --noconfirm --needed --overwrite '*' \
-    cmake \
-    ninja \
-    strace \
-    flex \
-    bison \
     sdl2 \
-    sdl2_ttf \
-    sdl2_image \
-    sdl2_mixer \
     openal \
     libvorbis \
     libogg \
@@ -78,18 +74,13 @@ pacman -S --noconfirm --needed --overwrite '*' \
     libmad \
     curl \
     libpulse \
-    pipewire-audio \
-    pipewire-jack \
     alsa-lib \
     mesa \
     glu \
-    vulkan-icd-loader \
-    vulkan-headers \
     libglvnd \
     libdrm \
     libgbm \
     wayland \
-    wayland-protocols \
     libxkbcommon \
     libdecor \
     libx11 \
@@ -104,20 +95,14 @@ pacman -S --noconfirm --needed --overwrite '*' \
     libxcb \
     libxau \
     libxdmcp \
-    || {
-        err "pacman failed to install dependencies"
-        err "Trying to continue anyway (some packages may already be present)"
-    }
+    || warn "Some packages failed to install (may already be present)"
 
-log "Verifying critical tools..."
-for _tool in cmake ninja flex bison strace; do
-    if command -v "$_tool" >/dev/null 2>&1; then
-        log "  OK: $_tool -> $(command -v $_tool)"
-    else
-        err "  MISSING: $_tool"
-        exit 1
-    fi
-done
+log "Verifying quick-sharun is available..."
+command -v quick-sharun >/dev/null 2>&1 || {
+    err "quick-sharun not found. anylinux-setup-action should have installed it."
+    exit 1
+}
+log "  OK: quick-sharun -> $(command -v quick-sharun)"
 
 if command -v get-debloated-pkgs >/dev/null 2>&1; then
     log "Installing debloated packages..."
@@ -126,78 +111,120 @@ if command -v get-debloated-pkgs >/dev/null 2>&1; then
 fi
 
 # ---------------------------------------------------------------------------
-# STEP 2: Clone and compile OpenMoHAA
+# STEP 2: Download OpenMoHAA release
 # ---------------------------------------------------------------------------
-section "STEP 2/6: Clone and compile OpenMoHAA"
+section "STEP 2/5: Download OpenMoHAA release"
 
 rm -rf "$BUILDDIR" "$APPDIR" "$DISTDIR"
-mkdir -p "$SRC_DIR" "$ROOTFS" "$DISTDIR"
+mkdir -p "$BUILDDIR" "$ROOTFS" "$DISTDIR"
 
+# Determine which version to download
 if [ -n "${OPENMOHAA_REF:-}" ]; then
-    git clone --depth=1 --branch "$OPENMOHAA_REF" "$UPSTREAM_URL" "$SRC_DIR/openmohaa"
+    # User specified a ref (tag/branch/commit)
+    OPENMOHAA_VERSION="$OPENMOHAA_REF"
+    log "Using user-specified ref: $OPENMOHAA_VERSION"
 else
-    git clone --depth=1 "$UPSTREAM_URL" "$SRC_DIR/openmohaa"
+    # Get latest release tag
+    OPENMOHAA_VERSION=$(curl -fsSL \
+        -H "Accept: application/vnd.github+json" \
+        "https://api.github.com/repos/${UPSTREAM_REPO}/releases/latest" \
+        | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)
+    log "Latest upstream version: $OPENMOHAA_VERSION"
 fi
 
-cd "$SRC_DIR/openmohaa"
-OPENMOHAA_VERSION=$(git describe --tags --always 2>/dev/null || echo "unknown")
-OPENMOHAA_COMMIT=$(git rev-parse --short HEAD)
-log "OpenMoHAA version: ${OPENMOHAA_VERSION} (commit ${OPENMOHAA_COMMIT})"
+# Build download URL
+# OpenMoHAA uses tags like "v0.82.1" but the zip uses "v0.82.1" in filename
+DOWNLOAD_URL="https://github.com/${UPSTREAM_REPO}/releases/download/${OPENMOHAA_VERSION}/openmohaa-${OPENMOHAA_VERSION}-linux-${OPENMOHAA_ARCH}.zip"
 
-echo "${OPENMOHAA_VERSION}" > "${WORKDIR}/LATEST_VERSION"
-echo "${OPENMOHAA_COMMIT}" > "${WORKDIR}/LATEST_COMMIT"
+log "Downloading: $DOWNLOAD_URL"
+cd "$BUILDDIR"
+if ! curl -fSL --retry 3 -o openmohaa.zip "$DOWNLOAD_URL"; then
+    err "Failed to download from: $DOWNLOAD_URL"
+    err "Check that the version '$OPENMOHAA_VERSION' exists and has a linux-${OPENMOHAA_ARCH} asset."
+    exit 1
+fi
+log "Downloaded: $(ls -lh openmohaa.zip | awk '{print $5}')"
 
-cmake -S "$SRC_DIR/openmohaa" -B "$SRC_DIR/openmohaa/.cmake-build" \
-    -DCMAKE_BUILD_TYPE="$CMAKE_BUILD_TYPE" -DCMAKE_INSTALL_PREFIX=/usr \
-    -DBUILD_CLIENT="$BUILD_CLIENT" -DBUILD_SERVER="$BUILD_SERVER" \
-    -DBUILD_RENDERER_GL1="$BUILD_RENDERER_GL1" -DBUILD_RENDERER_GL2="$BUILD_RENDERER_GL2" \
-    -DBUILD_GAME_LIBRARIES="$BUILD_GAME_LIBRARIES" -DBUILD_GAME_QVMS="$BUILD_GAME_QVMS" \
-    -DUSE_INTERNAL_LIBS="$USE_INTERNAL_LIBS" -DUSE_OPENAL="$USE_OPENAL" \
-    -DUSE_OPENAL_DLOPEN="$USE_OPENAL_DLOPEN" -DUSE_HTTP="$USE_HTTP" \
-    -DUSE_CODEC_VORBIS="$USE_CODEC_VORBIS" -DUSE_CODEC_OPUS="$USE_CODEC_OPUS" \
-    -DUSE_CODEC_MAD="$USE_CODEC_MAD" -G Ninja
+# Extract
+log "Extracting..."
+mkdir -p extracted
+unzip -o openmohaa.zip -d extracted/ >/dev/null
+log "Extracted files:"
+ls -la extracted/
 
-log "Compiling with ${JOBS} parallel jobs (this can take 5-15 minutes)..."
-cmake --build "$SRC_DIR/openmohaa/.cmake-build" --parallel "$JOBS"
+# Save version info
+echo "$OPENMOHAA_VERSION" > "${WORKDIR}/LATEST_VERSION"
+# Get commit hash if possible (not critical if it fails)
+OPENMOHAA_COMMIT=$(curl -fsSL \
+    -H "Accept: application/vnd.github+json" \
+    "https://api.github.com/repos/${UPSTREAM_REPO}/commits/main" 2>/dev/null \
+    | sed -n 's/.*"sha": *"\([0-9a-f]\{12\}\).*/\1/p' | head -1 || echo "unknown")
+echo "$OPENMOHAA_COMMIT" > "${WORKDIR}/LATEST_COMMIT"
 
 # ---------------------------------------------------------------------------
-# STEP 3: Install into rootfs
+# STEP 3: Install into rootfs (simulating /usr layout)
 # ---------------------------------------------------------------------------
-section "STEP 3/6: Install into rootfs"
+section "STEP 3/5: Install into rootfs"
 
-DESTDIR="$ROOTFS" cmake --install "$SRC_DIR/openmohaa/.cmake-build" || true
+# Create /usr/lib/openmohaa/ with all binaries and libs from the zip
+mkdir -p "$ROOTFS/usr/lib/openmohaa"
+cp -v extracted/* "$ROOTFS/usr/lib/openmohaa/"
+chmod +x "$ROOTFS/usr/lib/openmohaa"/openmohaa \
+         "$ROOTFS/usr/lib/openmohaa"/omohaaded \
+         "$ROOTFS/usr/lib/openmohaa"/launch_openmohaa_* 2>/dev/null || true
 
-# Create launchers if they weren't installed
-for variant in base spearhead breakthrough; do
-    if [ ! -f "$ROOTFS/usr/lib/openmohaa/launch_openmohaa_${variant}" ]; then
-        cat > "$ROOTFS/usr/lib/openmohaa/launch_openmohaa_${variant}" <<EOF
+# Create a wrapper script in /usr/bin so the .desktop file works
+mkdir -p "$ROOTFS/usr/bin"
+cat > "$ROOTFS/usr/bin/openmohaa" <<'WRAPPER'
 #!/bin/sh
-case "${variant}" in
-    spearhead) exec /usr/lib/openmohaa/openmohaa +set fs_game ta "\$@" ;;
-    breakthrough) exec /usr/lib/openmohaa/openmohaa +set fs_game tt "\$@" ;;
-    *) exec /usr/lib/openmohaa/openmohaa "\$@" ;;
+# Entrypoint wrapper for OpenMoHAA AppImage.
+case "${1:-}" in
+    omohaaded|launch_openmohaa_*)
+        exec "/usr/lib/openmohaa/${1}" "${@:2}"
+        ;;
+    *)
+        exec /usr/lib/openmohaa/launch_openmohaa_base "$@"
+        ;;
 esac
-EOF
-        chmod +x "$ROOTFS/usr/lib/openmohaa/launch_openmohaa_${variant}"
-    fi
-done
+WRAPPER
+chmod +x "$ROOTFS/usr/bin/openmohaa"
 
-DESKTOP_FILE="$ROOTFS/usr/share/applications/org.openmoh.openmohaa.desktop"
-[ -f "$DESKTOP_FILE" ] && sed -i 's|^Exec=.*|Exec=openmohaa|' "$DESKTOP_FILE"
+# Create desktop file and icon (OpenMoHAA doesn't ship them, use simple ones)
+mkdir -p "$ROOTFS/usr/share/applications"
+mkdir -p "$ROOTFS/usr/share/icons/hicolor/scalable/apps"
+
+cat > "$ROOTFS/usr/share/applications/org.openmoh.openmohaa.desktop" <<DESKTOP
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=OpenMoHAA
+Comment=Open-source Medal of Honor: Allied Assault engine
+Categories=Game;Shooter;
+Icon=org.openmoh.openmohaa
+Exec=openmohaa
+Terminal=false
+DESKTOP
+
+# Simple SVG icon (openmohaa logo placeholder)
+cat > "$ROOTFS/usr/share/icons/hicolor/scalable/apps/org.openmoh.openmohaa.svg" <<'SVG'
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <rect width="128" height="128" fill="#1a3a5c"/>
+  <text x="64" y="80" font-family="sans-serif" font-size="48" font-weight="bold" text-anchor="middle" fill="#d4af37">M</text>
+</svg>
+SVG
+
+log "Installed files:"
+find "$ROOTFS" -type f | head -20
+log "Total installed size: $(du -sh "$ROOTFS" | cut -f1)"
 
 # ---------------------------------------------------------------------------
-# STEP 4: Bundle with quick-sharun
+# STEP 4: Bundle with quick-sharun + add portable hooks
 # ---------------------------------------------------------------------------
-section "STEP 4/6: Bundle with quick-sharun"
+section "STEP 4/5: Bundle with quick-sharun"
 
-if ! command -v quick-sharun >/dev/null 2>&1; then
-    wget -q https://raw.githubusercontent.com/pkgforge-dev/Anylinux-AppImages/refs/heads/main/useful-tools/quick-sharun.sh \
-        -O /usr/local/bin/quick-sharun
-    chmod +x /usr/local/bin/quick-sharun
-fi
-
-export ICON="$ROOTFS/usr/share/icons/hicolor/symbolic/apps/org.openmoh.openmohaa.svg"
-export DESKTOP="$DESKTOP_FILE"
+export ICON="$ROOTFS/usr/share/icons/hicolor/scalable/apps/org.openmoh.openmohaa.svg"
+export DESKTOP="$ROOTFS/usr/share/applications/org.openmoh.openmohaa.desktop"
 export OUTPATH="$DISTDIR"
 export OUTNAME="${APP_NAME}-${ARCH}.AppImage"
 export APPDIR
@@ -205,28 +232,33 @@ export APPDIR
 [ -f "$ICON" ]    || { err "Icon not found"; exit 1; }
 [ -f "$DESKTOP" ] || { err "Desktop not found"; exit 1; }
 
+# Find all binaries and shared libraries to bundle
 BINARIES_TO_BUNDLE=$(find "$ROOTFS/usr/lib/openmohaa" \
-    \( -type f -executable -o -name "*.so" \) | sort)
+    \( -type f -executable -o -name "*.so" -o -name "*.so.*" \) | sort)
 
+log "Binaries/libraries to bundle:"
+echo "$BINARIES_TO_BUNDLE" | sed 's/^/  /'
+
+log "Running quick-sharun (deploys libc, ld-linux, dlopened libs, etc.)..."
+# shellcheck disable=SC2086
 quick-sharun $BINARIES_TO_BUNDLE
 
-# ---------------------------------------------------------------------------
-# STEP 5: Add portable asset detection
-# ---------------------------------------------------------------------------
-section "STEP 5/6: Add portable asset detection"
-
-log "Copying renderers to bin/..."
-for _renderer in renderer_opengl1.so renderer_opengl2.so; do
-    _src=$(find "$APPDIR/lib" -name "$_renderer" -type f 2>/dev/null | head -1)
-    [ -n "$_src" ] && [ ! -f "$APPDIR/bin/$_renderer" ] && cp -f "$_src" "$APPDIR/bin/$_renderer"
-done
-
-log "Copying game modules to bin/..."
+# --- Copy game modules to bin/ (OpenMoHAA loads them via dlopen from bin/) ---
+# quick-sharun puts .so files in lib/ but OpenMoHAA's Sys_LoadDll looks for
+# game.so and cgame.so in Sys_BinaryPath() which is bin/. We must copy them.
+log "Copying game modules to bin/ (OpenMoHAA dlopens them from there)..."
 for _mod in cgame.so game.so; do
     _src=$(find "$APPDIR/lib" -name "$_mod" -type f 2>/dev/null | head -1)
     [ -z "$_src" ] && _src="$ROOTFS/usr/lib/openmohaa/$_mod"
-    [ -n "$_src" ] && [ -f "$_src" ] && [ ! -f "$APPDIR/bin/$_mod" ] && cp -f "$_src" "$APPDIR/bin/$_mod"
+    if [ -n "$_src" ] && [ -f "$_src" ]; then
+        cp -f "$_src" "$APPDIR/bin/$_mod"
+        log "  Copied: $_mod -> bin/"
+    else
+        err "  WARNING: $_mod not found!"
+    fi
 done
+
+# --- Add portable asset detection hooks ---
 
 log "Removing self-updater.hook (causes loops when HOST_XDG_* is unset)..."
 rm -f "$APPDIR/bin/self-updater.hook"
@@ -234,6 +266,7 @@ rm -f "$APPDIR/bin/self-updater.hook"
 log "Installing openmohaa-portable-paths.hook..."
 cat > "$APPDIR/bin/openmohaa-portable-paths.hook" <<'HOOK'
 #!/bin/sh
+# Hook: detect game assets next to the .AppImage file
 if [ -n "${OPENMOHAA_BASEPATH:-}" ]; then
     APP_DIR="$OPENMOHAA_BASEPATH"
 elif [ -n "${APPIMAGE:-}" ]; then
@@ -245,17 +278,27 @@ else
 fi
 export OPENMOHAA_BASEPATH="$APP_DIR"
 
+# Auto-seed cgame.so and game.so into <APP_DIR>/main/ if missing.
+# OpenMoHAA loads game modules from <fs_basepath>/<fs_game>/ where fs_game
+# defaults to "main". We also seed to <APP_DIR>/ directly because some
+# versions of OpenMoHAA look there too.
 if [ -n "${APPDIR:-}" ] && [ -d "${APPDIR}/bin" ]; then
     MAIN_DIR="${APP_DIR}/main"
     mkdir -p "$MAIN_DIR" 2>/dev/null || true
     for _mod in cgame.so game.so; do
         _bundled="${APPDIR}/bin/${_mod}"
-        _target="${MAIN_DIR}/${_mod}"
-        if [ -f "$_bundled" ] && [ ! -f "$_target" ]; then
-            cp -f "$_bundled" "$_target" 2>/dev/null || true
+        # Seed to main/ (standard ioquake3 location)
+        _target_main="${MAIN_DIR}/${_mod}"
+        if [ -f "$_bundled" ] && [ ! -f "$_target_main" ]; then
+            cp -f "$_bundled" "$_target_main" 2>/dev/null || true
+        fi
+        # Seed to APP_DIR/ directly (OpenMoHAA v0.82+ also looks here)
+        _target_root="${APP_DIR}/${_mod}"
+        if [ -f "$_bundled" ] && [ ! -f "$_target_root" ]; then
+            cp -f "$_bundled" "$_target_root" 2>/dev/null || true
         fi
     done
-    unset _mod _bundled _target MAIN_DIR
+    unset _mod _bundled _target_main _target_root MAIN_DIR
 fi
 HOOK
 chmod +x "$APPDIR/bin/openmohaa-portable-paths.hook"
@@ -302,6 +345,7 @@ fi
 
 set -- "$TO_LAUNCH" "$@"
 
+# Inject +set fs_basepath so OpenMoHAA finds assets next to the AppImage
 if [ -n "${OPENMOHAA_BASEPATH:-}" ]; then
         _has_bp=0; _prev=""
         for _a in "$@"; do
@@ -331,11 +375,20 @@ fi
 APPRUN
 chmod +x "$APPDIR/AppRun.sh"
 
-# ---------------------------------------------------------------------------
-# STEP 6: Generate AppImage
-# ---------------------------------------------------------------------------
-section "STEP 6/6: Generate AppImage"
+log "Verifying AppRun is still the sharun binary (not overwritten)..."
+if file "$APPDIR/AppRun" | grep -q "ELF"; then
+    log "  OK: AppRun is sharun ELF"
+else
+    err "  FAIL: AppRun was overwritten!"
+    exit 1
+fi
 
+# ---------------------------------------------------------------------------
+# STEP 5: Generate AppImage
+# ---------------------------------------------------------------------------
+section "STEP 5/5: Generate AppImage"
+
+log "Turning AppDir into AppImage..."
 quick-sharun --make-appimage
 
 APPIMAGE="${DISTDIR}/${OUTNAME}"
@@ -348,22 +401,45 @@ EXTRACT_DIR="${BUILDDIR}/squashfs-root"
 rm -rf "$EXTRACT_DIR"
 ( cd "$BUILDDIR" && "$APPIMAGE" --appimage-extract >/dev/null 2>&1 ) || true
 
-[ -f "$EXTRACT_DIR/lib/ld-linux-${ARCH}.so.2" ] && log "OK: ld-linux bundled"
-[ -f "$EXTRACT_DIR/lib/libc.so.6" ] && log "OK: libc bundled"
-[ -f "$EXTRACT_DIR/bin/renderer_opengl1.so" ] && log "OK: renderer in bin/"
-[ -f "$EXTRACT_DIR/bin/openmohaa-portable-paths.hook" ] && log "OK: portable hook"
-file "$APPDIR/AppRun" | grep -q "ELF" && log "OK: AppRun is sharun ELF (not overwritten)"
+log "Verifying bundling..."
+[ -f "$EXTRACT_DIR/lib/ld-linux-${ARCH}.so.2" ] && log "  OK: ld-linux bundled" || err "  FAIL: ld-linux missing"
+[ -f "$EXTRACT_DIR/lib/libc.so.6" ] && log "  OK: libc bundled" || err "  FAIL: libc missing"
+[ -f "$EXTRACT_DIR/bin/openmohaa-portable-paths.hook" ] && log "  OK: portable hook"
+[ -L "$EXTRACT_DIR/bin/openmohaa" ] && log "  OK: bin/openmohaa symlink"
 
+# CRITICAL: verify game modules are in bin/ (OpenMoHAA dlopens them from there)
+for _mod in cgame.so game.so; do
+    if [ -f "$EXTRACT_DIR/bin/$_mod" ]; then
+        log "  OK: bin/$_mod present (OpenMoHAA will find it)"
+    else
+        err "  FAIL: bin/$_mod missing - game will crash with 'Couldn't load game'!"
+        exit 1
+    fi
+done
+
+LIB_COUNT=$(find "$EXTRACT_DIR/lib" -maxdepth 1 -type f 2>/dev/null | wc -l)
+log "  Total bundled libraries: $LIB_COUNT"
+
+log "Generating checksums..."
 ( cd "$DISTDIR" && sha256sum "$OUTNAME" > "${OUTNAME}.sha256" )
 
+# ---------------------------------------------------------------------------
+# Summary
+# ---------------------------------------------------------------------------
 section "Build Summary"
-cat <<EOF
-App: $APP_PRETTY $OPENMOHAA_VERSION ($OPENMOHAA_COMMIT)
-Arch: $ARCH
-Size: $(ls -lh "$APPIMAGE" | awk '{print $5}')
-SHA256: $(cut -d' ' -f1 "${APPIMAGE}.sha256")
 
-Usage:
+cat <<EOF
+App:           $APP_PRETTY $OPENMOHAA_VERSION
+Arch:          $ARCH ($OPENMOHAA_ARCH)
+AppImage:      $APPIMAGE
+Size:          $(ls -lh "$APPIMAGE" | awk '{print $5}')
+Libraries:     $LIB_COUNT
+Dynamic linker: bundled
+libc:          bundled
+Portable hook: installed
+SHA256:        $(cut -d' ' -f1 "${APPIMAGE}.sha256")
+
+The AppImage is ready. Usage:
   1. Place .pk3 assets in main/ next to the AppImage
   2. ./openmohaa-${ARCH}.AppImage
   3. Server: ./openmohaa-${ARCH}.AppImage omohaaded +quit
