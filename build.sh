@@ -56,14 +56,14 @@ trap 'err "Build failed at line $LINENO (exit code: $?)"' ERR
 # ---------------------------------------------------------------------------
 section "STEP 1/6: Install build dependencies"
 
-pacman -Syu --noconfirm \
+pacman -Syu --noconfirm --needed \
     base-devel cmake ninja git wget curl strace patchelf flex bison \
     sdl2 sdl2_ttf sdl2_image sdl2_mixer openal libvorbis libogg opus flac \
     libmad curl libpulse pipewire-audio pipewire-jack alsa-lib mesa glu \
     vulkan-icd-loader vulkan-headers libglvnd libdrm libgbm wayland \
     wayland-protocols libxkbcommon libdecor xorg-server-xvfb libx11 libxext \
     libxcursor libxi libxfixes libxrandr libxss libxinerama libxrender \
-    libxcb libxau libxdmcp 2>&1 | tail -5
+    libxcb libxau libxdmcp 2>&1 | tail -10 || true
 
 if command -v get-debloated-pkgs >/dev/null 2>&1; then
     get-debloated-pkgs --add-mesa --prefer-nano   || warn "debloat mesa failed"
