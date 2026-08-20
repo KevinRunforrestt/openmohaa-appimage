@@ -32,26 +32,49 @@ jobs:
         run: |
           set -euo pipefail
           UPSTREAM_REPO="openmoh/openmohaa"
+
+          # Read our built version from LATEST_VERSION (strip -beta suffix for comparison)
           LAST_BUILT=""
-          [ -f ./VERSION ] && LAST_BUILT="$(tr -d '[:space:]' < ./VERSION)"
+          [ -f ./LATEST_VERSION ] && LAST_BUILT="$(tr -d '[:space:]' < ./LATEST_VERSION)"
+
+          # Get upstream tag_name (e.g. "v0.82.1")
           LATEST_TAG=$(curl -fsSL -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             "https://api.github.com/repos/${UPSTREAM_REPO}/releases/latest" \
             | jq -r '.tag_name // empty')
-          LATEST_COMMIT=$(curl -fsSL -H "Accept: application/vnd.github+json" \
+
+          # Get upstream release name (e.g. "v0.82.1-beta") - this is the display version
+          LATEST_NAME=$(curl -fsSL -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer ${GH_TOKEN}" \
-            "https://api.github.com/repos/${UPSTREAM_REPO}/commits/main" \
-            | jq -r '.sha // empty' | cut -c1-12)
-          if [ -n "$LATEST_TAG" ]; then NEW_VERSION="$LATEST_TAG"
-          elif [ -n "$LATEST_COMMIT" ]; then NEW_VERSION="main@${LATEST_COMMIT}"
+            "https://api.github.com/repos/${UPSTREAM_REPO}/releases/latest" \
+            | jq -r '.name // empty')
+
+          # Use the display name (with -beta suffix) as NEW_VERSION
+          # This matches what we store in LATEST_VERSION
+          if [ -n "$LATEST_NAME" ]; then NEW_VERSION="$LATEST_NAME"
+          elif [ -n "$LATEST_TAG" ]; then NEW_VERSION="$LATEST_TAG"
           else echo "::error::Could not determine upstream version"; exit 1; fi
+
+          echo "Our version:     $LAST_BUILT"
+          echo "Upstream version: $NEW_VERSION (tag: $LATEST_TAG, name: $LATEST_NAME)"
+
+          # Compare using the FULL version string (including -beta suffix)
+          # This way "v0.82.1-beta" == "v0.82.1-beta" and no issue is created
           SHOULD_NOTIFY="false"
-          if [ "${FORCE_ISSUE}" = "true" ]; then SHOULD_NOTIFY="true"
-          elif [ -z "$LAST_BUILT" ]; then SHOULD_NOTIFY="true"
-          elif [ "$NEW_VERSION" != "$LAST_BUILT" ]; then SHOULD_NOTIFY="true"; fi
+          if [ "${FORCE_ISSUE}" = "true" ]; then
+            SHOULD_NOTIFY="true"
+          elif [ -z "$LAST_BUILT" ]; then
+            SHOULD_NOTIFY="true"
+          elif [ "$NEW_VERSION" != "$LAST_BUILT" ]; then
+            SHOULD_NOTIFY="true"
+          else
+            echo "Upstream is up-to-date with our latest build. Nothing to do."
+          fi
+
           echo "new_version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
           echo "last_built=${LAST_BUILT}" >> "$GITHUB_OUTPUT"
           echo "should_notify=${SHOULD_NOTIFY}" >> "$GITHUB_OUTPUT"
+
       - name: Open Issue
         if: steps.detect.outputs.should_notify == 'true'
         env:
@@ -61,23 +84,36 @@ jobs:
           NEW_VERSION="${{ steps.detect.outputs.new_version }}"
           gh label create "upstream-update" --repo "${{ github.repository }}" \
             --description "New upstream version available" --color "0E8A16" 2>/dev/null || true
-          gh issue create --repo "${{ github.repository }}" \
-            --title "New upstream version available: ${NEW_VERSION}" \
-            --body "New version detected: ${NEW_VERSION}. Run the Build AppImage workflow to update." \
-            --label "upstream-update"
-      - name: Auto-trigger build (optional)
-        if: steps.detect.outputs.should_notify == 'true' && vars.AUTO_BUILD == '1'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          COMMIT="${{ steps.detect.outputs.upstream_commit }}"
-          gh workflow run appimage.yml --repo "${{ github.repository }}" -f openmohaa_ref="${COMMIT}"
+
+          # Check for existing open issues to avoid duplicates
+          EXISTING=$(gh issue list \
+            --repo "${{ github.repository }}" \
+            --state open \
+            --label "upstream-update" \
+            --limit 50 \
+            --json number,title 2>/dev/null || echo "[]")
+          COUNT=$(echo "$EXISTING" | jq 'length')
+
+          if [ "$COUNT" -gt 0 ]; then
+            echo "Already have $COUNT open upstream-update issues, updating existing one..."
+            FIRST=$(echo "$EXISTING" | jq -r '.[0].number')
+            gh issue comment "$FIRST" --repo "${{ github.repository }}" \
+              --body "Still pending: ${NEW_VERSION} (checked on $(date -u '+%Y-%m-%d %H:%M:%S UTC'))"
+          else
+            gh issue create --repo "${{ github.repository }}" \
+              --title "New upstream version available: ${NEW_VERSION}" \
+              --body "New version detected: ${NEW_VERSION}. Run the Build AppImage workflow to update." \
+              --label "upstream-update"
+          fi
+
       - name: Close resolved Issues
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           LAST_BUILT="${{ steps.detect.outputs.last_built }}"
           [ -z "$LAST_BUILT" ] && exit 0
+          # Close issues whose title contains the built version
           gh issue list --repo "${{ github.repository }}" --state open \
             --label "upstream-update" --json number,title --limit 50 \
             | jq -r --arg v "$LAST_BUILT" '.[] | select(.title | test($v)) | .number' \
